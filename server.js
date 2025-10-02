@@ -233,7 +233,7 @@ app.post('/api/games/roulette/spin', isAuthenticated, isNotBanned, async(req, re
 // --- ADMIN PANEL API ROUTES ---
 app.get('/api/admin/players', isAdmin, async (req, res) => {
     try {
-        const [rows] = await dbPool.query('SELECT id, username, balance, is_banned, created_at FROM players WHERE ORDER BY created_at DESC');
+        const [rows] = await dbPool.query('SELECT id, username, balance, is_banned, created_at FROM players ORDER BY created_at DESC');
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Failed to fetch players' }); }
 });
