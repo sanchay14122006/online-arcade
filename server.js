@@ -14,11 +14,14 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- DATABASE AND SESSION STORE SETUP (SIMPLIFIED) ---
+// --- DATABASE AND SESSION STORE SETUP (SIMPLIFIED & FIXED) ---
 
-// 1. Create the Database Pool using the connection string AND the SSL certificate
+// 1. Aiven's URL includes an ssl-mode parameter that mysql2 warns about. We handle SSL through the ssl object, so we can remove it from the string.
+const connectionUri = process.env.DATABASE_URL.replace("?ssl-mode=REQUIRED", "");
+
+// 2. Create the Database Pool using the cleaned connection string AND the SSL certificate
 const dbPool = mysql.createPool({
-    uri: process.env.DATABASE_URL, // Use the single connection string
+    uri: connectionUri, // Use the cleaned connection string
     ssl: {
         ca: fs.readFileSync(path.join(__dirname, 'ca.pem')) // And add the certificate
     },
@@ -27,10 +30,10 @@ const dbPool = mysql.createPool({
     queueLimit: 0
 });
 
-// 2. Create a session store connected to the database
+// 3. Create a session store connected to the database
 const sessionStore = new MySQLStore({}, dbPool);
 
-// 3. Use the new session store in the session middleware
+// 4. Use the new session store in the session middleware
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
@@ -43,36 +46,48 @@ app.use(session({
     }
 }));
 
-// Serve static files
+
+// --- STATIC FILE SERVING ---
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/admin/panel', (req, res, next) => {
+app.use('/admin', (req, res, next) => {
     if (req.session && req.session.userId && req.session.isAdmin) {
         return express.static(path.join(__dirname, 'admin'))(req, res, next);
     }
     return res.redirect('/');
 });
 
-// --- Middleware ---
-const isAuthenticated = (req, res, next) => { if (req.session.userId) next(); else res.status(401).json({ message: 'Not authenticated' }); };
-const isAdmin = (req, res, next) => { if (req.session.userId && req.session.isAdmin) next(); else res.status(403).json({ message: 'Forbidden: Admins only' }); };
 
-const isNotBanned = async (req, res, next) => {
-    if (!req.session.userId) return res.status(401).json({ message: 'Not authenticated' });
-    try {
-        const [rows] = await dbPool.query('SELECT is_banned FROM players WHERE id = ?', [req.session.userId]);
-        if (rows.length > 0 && !rows[0].is_banned) {
-            return next();
-        }
-        req.session.destroy(err => {
-            res.status(403).json({ message: 'This account has been banned.' });
-        });
-    } catch (error) {
-        res.status(500).json({ message: 'Server error during ban check' });
+// --- MIDDLEWARE ---
+const isAuthenticated = (req, res, next) => {
+    if (req.session.userId) {
+        next();
+    } else {
+        res.status(401).json({ message: 'Not authenticated' });
     }
 };
 
+const isNotBanned = async (req, res, next) => {
+    if (!req.session.userId) return next();
+    try {
+        const [rows] = await dbPool.query('SELECT is_banned FROM players WHERE id = ?', [req.session.userId]);
+        if (rows.length > 0 && rows[0].is_banned) {
+            return res.status(403).json({ message: 'This account has been banned.' });
+        }
+        next();
+    } catch (error) {
+        res.status(500).json({ message: 'Server error checking ban status.' });
+    }
+};
 
-// --- Auth Routes ---
+const isAdmin = (req, res, next) => {
+    if (req.session && req.session.userId && req.session.isAdmin) {
+        return next();
+    }
+    res.status(403).json({ message: 'Forbidden: Admins only' });
+};
+
+
+// --- AUTH ROUTES ---
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
@@ -92,9 +107,11 @@ app.post('/api/login', async (req, res) => {
             res.status(401).json({ message: 'Invalid credentials' });
         }
     } catch (error) {
+        console.error('Login error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 });
+
 app.post('/api/logout', (req, res) => {
     req.session.destroy(err => {
         if (err) return res.status(500).json({ message: 'Could not log out.' });
@@ -104,19 +121,20 @@ app.post('/api/logout', (req, res) => {
 });
 
 
-// --- Player API ---
+// --- PLAYER API ---
 app.get('/api/player', isAuthenticated, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT username, balance FROM players WHERE id = ?', [req.session.userId]);
         if (rows.length > 0) res.json(rows[0]);
         else res.status(404).json({ message: 'Player not found' });
     } catch (error) {
+        console.error('Get player error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 });
 
 
-// --- Game Logic & Odds (SERVER-SIDE) ---
+// --- GAME LOGIC & ODDS (SERVER-SIDE) ---
 async function processPlay(playerId, gameName, wager, prize) {
     const connection = await dbPool.getConnection();
     try {
@@ -137,6 +155,7 @@ async function processPlay(playerId, gameName, wager, prize) {
         return { success: true, newBalance };
     } catch (error) {
         await connection.rollback();
+        console.error(`Error in ${gameName} play:`, error);
         return { success: false, message: 'Server error during game play' };
     } finally {
         connection.release();
@@ -147,29 +166,15 @@ app.post('/api/games/slot-machine/spin', isAuthenticated, isNotBanned, async (re
     const wager = parseInt(req.body.wager, 10);
     if (isNaN(wager) || wager <= 0) return res.status(400).json({ message: 'Invalid wager' });
     
-    // Define virtual reels with weighted symbols for house edge
-    const virtualReel = [
-        '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', // 10
-        '🍋', '🍋', '🍋', '🍋', '🍋', '🍋', '🍋', '🍋', // 8
-        '🍊', '🍊', '🍊', '🍊', '🍊', '🍊', // 6
-        '🍉', '🍉', '🍉', '🍉', // 4
-        '⭐', '⭐', '⭐', // 3
-        '💎', '💎', // 2
-        '💰'      // 1 (rarest)
-    ]; // Total 34 items
-
-    // Pick a random symbol from the weighted virtual reel for each result
-    const results = [ 
-        virtualReel[Math.floor(Math.random() * virtualReel.length)], 
-        virtualReel[Math.floor(Math.random() * virtualReel.length)], 
-        virtualReel[Math.floor(Math.random() * virtualReel.length)] 
-    ];
-
-    // Original symbols array is still needed to determine the payout multiplier index
+    const virtualReel = [ '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍒', '🍋', '🍋', '🍋', '🍋', '🍋', '🍋', '🍋', '🍋', '🍊', '🍊', '🍊', '🍊', '🍊', '🍊', '🍉', '🍉', '🍉', '🍉', '⭐', '⭐', '⭐', '💎', '💎', '💰' ];
+    const results = [ virtualReel[Math.floor(Math.random() * virtualReel.length)], virtualReel[Math.floor(Math.random() * virtualReel.length)], virtualReel[Math.floor(Math.random() * virtualReel.length)] ];
     const symbols = ['🍒', '🍋', '🍊', '🍉', '⭐', '💎', '💰'];
     let prize = 0;
-    if (results[0] === results[1] && results[1] === results[2]) { prize = wager * (symbols.indexOf(results[0]) + 1) * 3; }
-    else if (results[0] === results[1] || results[1] === results[2]) { prize = wager * (symbols.indexOf(results[1]) + 1); }
+    if (results[0] === results[1] && results[1] === results[2]) {
+        prize = wager * (symbols.indexOf(results[0]) + 1) * 10;
+    } else if (results[0] === results[1]) {
+        prize = wager * (symbols.indexOf(results[0]) + 1) * 0.5;
+    }
     
     const result = await processPlay(req.session.userId, 'slot-machine', wager, prize);
     if (result.success) { res.json({ results, prize, newBalance: result.newBalance }); }
@@ -219,7 +224,7 @@ app.post('/api/games/roulette/spin', isAuthenticated, isNotBanned, async(req, re
 });
 
 
-// --- Admin Panel API Routes ---
+// --- ADMIN PANEL API ROUTES ---
 app.get('/api/admin/players', isAdmin, async (req, res) => {
     try {
         const [rows] = await dbPool.query('SELECT id, username, balance, is_banned, created_at FROM players WHERE is_admin = false ORDER BY created_at DESC');
@@ -227,16 +232,17 @@ app.get('/api/admin/players', isAdmin, async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Failed to fetch players' }); }
 });
 
-app.get('/api/admin/transactions', isAdmin, async (req, res) => {
+app.get('/api/admin/transactions/all', isAdmin, async (req, res) => {
     try {
-        const [rows] = await dbPool.query('SELECT t.*, p.username FROM transactions t JOIN players p ON t.player_id = p.id ORDER BY t.transaction_date DESC LIMIT 200');
+        const [rows] = await dbPool.query('SELECT * FROM transactions ORDER BY timestamp DESC LIMIT 200');
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Failed to fetch transactions' }); }
 });
 
+
 app.get('/api/admin/admin-actions', isAdmin, async (req, res) => {
     try {
-        const [rows] = await dbPool.query('SELECT aa.*, p.username AS admin_username FROM admin_actions aa JOIN players p ON aa.admin_id = p.id ORDER BY aa.action_timestamp DESC LIMIT 100');
+        const [rows] = await dbPool.query('SELECT a.*, p.username as admin_username FROM admin_actions a LEFT JOIN players p ON a.admin_id = p.id ORDER BY a.timestamp DESC LIMIT 100');
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Failed to fetch admin actions' }); }
 });
@@ -247,38 +253,47 @@ app.post('/api/admin/players', isAdmin, async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         await dbPool.query('INSERT INTO players (username, password, balance) VALUES (?, ?, ?)', [username, hashedPassword, balance || 0]);
-        const [playerRows] = await dbPool.query('SELECT id FROM players WHERE username = ?', [username]);
-        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_id) VALUES (?, ?, ?)', [req.session.userId, `Created player ${username}`, playerRows[0].id]);
+        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_username) VALUES (?, ?, ?)', [req.session.userId, `Created player ${username}`, username]);
         res.status(201).json({ message: 'Player created successfully' });
     } catch (error) { res.status(500).json({ message: 'Error creating player' }); }
 });
 
 app.put('/api/admin/players/:id', isAdmin, async (req, res) => {
-    const { balance, is_banned, password} = req.body;
+    const { balance, is_banned, password } = req.body;
+    const { id } = req.params;
+
     try {
-        const [playerRows] = await dbPool.query('SELECT username FROM players WHERE id = ?', [req.params.id]);
+        const [playerRows] = await dbPool.query('SELECT username FROM players WHERE id = ?', [id]);
         if (playerRows.length === 0) return res.status(404).json({ message: 'Player not found' });
+        const { username } = playerRows[0];
         
         let action = '';
         if (balance !== undefined) {
-            await dbPool.query('UPDATE players SET balance = ? WHERE id = ?', [balance, req.params.id]);
-            action = `Updated balance for ${playerRows[0].username} to ${balance}`;
+            await dbPool.query('UPDATE players SET balance = ? WHERE id = ?', [balance, id]);
+            action = `Updated balance for ${username} to ${balance}`;
         }
         if (is_banned !== undefined) {
-            await dbPool.query('UPDATE players SET is_banned = ? WHERE id = ?', [is_banned, req.params.id]);
-            action = `${is_banned ? 'Banned' : 'Unbanned'} player ${playerRows[0].username}`;
+            await dbPool.query('UPDATE players SET is_banned = ? WHERE id = ?', [is_banned, id]);
+            action = `${is_banned ? 'Banned' : 'Unbanned'} player ${username}`;
         }
-        if (password !== undefined) {
-            const newHashedPassword = await bcrypt.hash(password, 10);
-            await dbPool.query('UPDATE players SET password = ? WHERE id = ?', [newHashedPassword, req.params.id]);
-            action = `Password changed for ${playerRows[0].username}`;
+        if (password) {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            await dbPool.query('UPDATE players SET password = ? WHERE id = ?', [hashedPassword, id]);
+            action = `Reset password for player ${username}`;
         }
-        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_id) VALUES (?, ?, ?)', [req.session.userId, action, req.params.id]);
+        
+        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_username) VALUES (?, ?, ?)', [req.session.userId, action, username]);
         res.json({ message: 'Player updated successfully' });
     } catch (error) { res.status(500).json({ message: 'Error updating player' }); }
 });
 
 
-app.get('*', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
-app.listen(PORT, () => { console.log(`Server is running on http://localhost:${PORT}`); });
+// Serve the main application for any other GET request
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+});
 
