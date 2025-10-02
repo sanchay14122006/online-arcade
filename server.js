@@ -233,14 +233,14 @@ app.post('/api/games/roulette/spin', isAuthenticated, isNotBanned, async(req, re
 // --- ADMIN PANEL API ROUTES ---
 app.get('/api/admin/players', isAdmin, async (req, res) => {
     try {
-        const [rows] = await dbPool.query('SELECT id, username, balance, is_banned, created_at FROM players WHERE is_admin = false ORDER BY created_at DESC');
+        const [rows] = await dbPool.query('SELECT id, username, balance, is_banned, created_at FROM players WHERE ORDER BY created_at DESC');
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Failed to fetch players' }); }
 });
 
-app.get('/api/admin/transactions/all', isAdmin, async (req, res) => {
+app.get('/api/admin/transactions', isAdmin, async (req, res) => {
     try {
-        const [rows] = await dbPool.query('SELECT * FROM transactions ORDER BY timestamp DESC LIMIT 200');
+        const [rows] = await dbPool.query('SELECT * FROM transactions ORDER BY transaction_date DESC LIMIT 200');
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Failed to fetch transactions' }); }
 });
@@ -248,7 +248,7 @@ app.get('/api/admin/transactions/all', isAdmin, async (req, res) => {
 
 app.get('/api/admin/admin-actions', isAdmin, async (req, res) => {
     try {
-        const [rows] = await dbPool.query('SELECT a.*, p.username as admin_username FROM admin_actions a LEFT JOIN players p ON a.admin_id = p.id ORDER BY a.timestamp DESC LIMIT 100');
+        const [rows] = await dbPool.query('SELECT a.*, p.id as admin_id FROM admin_actions a LEFT JOIN players p ON a.admin_id = p.id ORDER BY a.action_timestamp DESC LIMIT 100');
         res.json(rows);
     } catch (error) { res.status(500).json({ message: 'Failed to fetch admin actions' }); }
 });
@@ -259,7 +259,8 @@ app.post('/api/admin/players', isAdmin, async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         await dbPool.query('INSERT INTO players (username, password, balance) VALUES (?, ?, ?)', [username, hashedPassword, balance || 0]);
-        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_username) VALUES (?, ?, ?)', [req.session.userId, `Created player ${username}`, username]);
+        const userId = await dbPool.query('SELECT FROM players (username, password, balance) VALUES (?, ?, ?)', [username, hashedPassword, balance || 0]);
+        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_id) VALUES (?, ?, ?)', [req.session.userId, `Created player ${username}`, userId]);
         res.status(201).json({ message: 'Player created successfully' });
     } catch (error) { res.status(500).json({ message: 'Error creating player' }); }
 });
@@ -288,7 +289,7 @@ app.put('/api/admin/players/:id', isAdmin, async (req, res) => {
             action = `Reset password for player ${username}`;
         }
         
-        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_username) VALUES (?, ?, ?)', [req.session.userId, action, username]);
+        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_id) VALUES (?, ?, ?)', [req.session.userId, action, id]);
         res.json({ message: 'Player updated successfully' });
     } catch (error) { res.status(500).json({ message: 'Error updating player' }); }
 });

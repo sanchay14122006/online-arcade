@@ -108,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const username = e.target.username.value, password = e.target.password.value;
                 const result = await api.login(username, password);
                 const errorEl = screen.querySelector('#login-error');
-                if (result.ok) { errorEl.textContent = ''; if (result.data.isAdmin) { window.location.href = '/admin/panel'; } else { await api.getPlayerData(); render('lobby'); } }
+                if (result.ok) { errorEl.textContent = ''; if (result.data.isAdmin) { window.location.href = '/admin'; } else { await api.getPlayerData(); render('lobby'); } }
                 else { errorEl.textContent = result.data.message; }
             });
             return screen;
