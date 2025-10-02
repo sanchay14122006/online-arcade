@@ -111,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.dataset.id = audit.id;
         row.innerHTML = `
             <td><input type="checkbox" data-id="${audit.id}"></td>
-            <td>${audit.admin_username || 'N/A'}</td>
+            <td>${audit.admin_id || 'N/A'}</td>
             <td>${audit.target_player_id || 'N/A'}</td>
             <td>${audit.action}</td>
             <td>${new Date(audit.action_timestamp).toLocaleString()}</td>`;

@@ -179,7 +179,7 @@ app.post('/api/games/slot-machine/spin', isAuthenticated, isNotBanned, async (re
     if (results[0] === results[1] && results[1] === results[2]) {
         prize = wager * (symbols.indexOf(results[0]) + 1) * 3;
     } else if (results[0] === results[1] || results[1] === results[2]) {
-        prize = wager * (symbols.indexOf(results[0]) + 1);
+        prize = wager * (symbols.indexOf(results[1]) + 1);
     }
     
     const result = await processPlay(req.session.userId, 'slot-machine', wager, prize);
