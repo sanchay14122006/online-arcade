@@ -98,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.dataset.id = trx.id;
         row.innerHTML = `
             <td><input type="checkbox" data-id="${trx.id}"></td>
-            <td>${trx.username}</td>
+            <td>${trx.player_id}</td>
             <td>${trx.game}</td>
             <td>${trx.amount_wagered}</td>
             <td>${trx.outcome_amount}</td>

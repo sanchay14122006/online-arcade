@@ -177,9 +177,9 @@ app.post('/api/games/slot-machine/spin', isAuthenticated, isNotBanned, async (re
     const symbols = ['🍒', '🍋', '🍊', '🍉', '⭐', '💎', '💰'];
     let prize = 0;
     if (results[0] === results[1] && results[1] === results[2]) {
-        prize = wager * (symbols.indexOf(results[0]) + 1) * 10;
-    } else if (results[0] === results[1]) {
-        prize = wager * (symbols.indexOf(results[0]) + 1) * 0.5;
+        prize = wager * (symbols.indexOf(results[0]) + 1) * 3;
+    } else if (results[0] === results[1] || results[1] === results[2]) {
+        prize = wager * (symbols.indexOf(results[0]) + 1);
     }
     
     const result = await processPlay(req.session.userId, 'slot-machine', wager, prize);
