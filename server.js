@@ -14,6 +14,10 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// --- PRODUCTION FIX: TRUST THE RENDER PROXY ---
+// This tells Express to trust the headers sent by Render's reverse proxy.
+app.set('trust proxy', 1); 
+
 // --- DATABASE AND SESSION STORE SETUP (SIMPLIFIED & FIXED) ---
 
 // 1. Aiven's URL includes an ssl-mode parameter that mysql2 warns about. We handle SSL through the ssl object, so we can remove it from the string.
@@ -41,8 +45,10 @@ app.use(session({
     store: sessionStore, // Use the new persistent store
     cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        secure: true, // Must be true for 'none' sameSite
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        // --- PRODUCTION FIX: COOKIE SETTINGS FOR CROSS-SITE CONTEXT ---
+        sameSite: 'none' 
     }
 }));
 
