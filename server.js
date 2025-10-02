@@ -2,8 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session); // For persistent sessions
 const bcrypt = require('bcrypt');
 const path = require('path');
+const fs = require('fs'); // Still needed to read the certificate file
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,11 +13,34 @@ const PORT = process.env.PORT || 3000;
 // Middleware Setup
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// --- DATABASE AND SESSION STORE SETUP (SIMPLIFIED) ---
+
+// 1. Create the Database Pool using the connection string AND the SSL certificate
+const dbPool = mysql.createPool({
+    uri: process.env.DATABASE_URL, // Use the single connection string
+    ssl: {
+        ca: fs.readFileSync(path.join(__dirname, 'ca.pem')) // And add the certificate
+    },
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+});
+
+// 2. Create a session store connected to the database
+const sessionStore = new MySQLStore({}, dbPool);
+
+// 3. Use the new session store in the session middleware
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 24 * 60 * 60 * 1000 }
+    store: sessionStore, // Use the new persistent store
+    cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
 }));
 
 // Serve static files
@@ -26,13 +51,6 @@ app.use('/admin/panel', (req, res, next) => {
     }
     return res.redirect('/');
 });
-
-
-const dbPool = mysql.createPool({
-    host: process.env.DB_HOST, user: process.env.DB_USER, password: process.env.DB_PASSWORD,
-    database: process.env.DB_DATABASE, waitForConnections: true, connectionLimit: 10, queueLimit: 0
-});
-
 
 // --- Middleware ---
 const isAuthenticated = (req, res, next) => { if (req.session.userId) next(); else res.status(401).json({ message: 'Not authenticated' }); };
