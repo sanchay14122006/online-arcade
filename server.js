@@ -259,10 +259,8 @@ app.post('/api/admin/players', isAdmin, async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         await dbPool.query('INSERT INTO players (username, password, balance) VALUES (?, ?, ?)', [username, hashedPassword, balance || 0]);
-        console.log(username)
         const uid = await dbPool.query('SELECT id FROM players WHERE username = ?', [username]);
-        console.log(uid, req.session.userId)
-        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_id) VALUES (?, ?, ?)', [req.session.userId, `Created player ${username}`, uid]);
+        await dbPool.query('INSERT INTO admin_actions (admin_id, action, target_player_id) VALUES (?, ?, ?)', [req.session.userId, `Created player ${username}`, uid[0].id]);
         res.status(201).json({ message: 'Player created successfully' });
     } catch (error) { res.status(500).json({ message: 'Error creating player' }); }
 });
